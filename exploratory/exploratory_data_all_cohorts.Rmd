@@ -1,0 +1,278 @@
+---
+title: "EEDBI Exploratory Data - All Cohorts"
+output:
+  html_document:
+    df_print: paged
+---
+
+Notes on cohorts, diagnosis distribution and missing data
+
+## BGI
+All BGI samples are "diagnosed" malnourished. All experimental prep data (librayPrepDate, sequencingDate, rnaIsolationDate) is missing. This is the only cohort with repeat measures (2 dissections per individual). biospySite is unknown (labeled as "Other"). Sample preparation - poly (A) capture and ribosome depletion.
+
+## UVA
+Samples sequenced from two sites - UVA, USA and Icddr,b, Bangladesh. Libraries prepared and sequenced in 3 batches (more or less in a site-specific manner, e.g. 2/3 batches UVA only, 1 batch BEED and UVA samples). Sample preparation - only ribosome depletion. 
+
+## CCHMC 
+Samples sequenced from two sites - CCHMC, USA and AKU (or SEEM), Pakistan. Libraries prepared and sequenced in 2 batches (not site-specific, e.g. CCHMC and SEEM samples prepared in both batches). Sample preparation - poly (A) capture and ribosome depletion. 
+```{r setup, echo = FALSE, message = FALSE, warning = FALSE}
+library(synapser)
+library(tidyverse)
+library(readr)
+library(sageseqr)
+library(tibble)
+synLogin(silent = TRUE)
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+```
+
+
+```{r functions}
+# This function is adapted from sageseqr::identify_outliers() to accept quantile normalized counts
+fuse <- function(counts, clean_metadata, color, shape, z = 4){
+
+PC <- stats::prcomp(counts,
+  scale. = TRUE,
+  center = TRUE)
+
+# Plot first 2 PCs
+data <- data.frame(SampleID = rownames(PC$rotation),
+                   PC1 = PC$rotation[,1],
+                   PC2 = PC$rotation[,2])
+
+# Percentage from each PC
+eigen <- PC$sdev^2
+pc1 <- eigen[1]/sum(eigen)
+pc2 <- eigen[2]/sum(eigen)
+
+# Samples outside ellipse with radii defined as z SDs from the mean are
+# outliers
+outliers <- as.character(
+  data$SampleID[
+    c(
+      which(
+        ((data$PC1 - mean(data$PC1))^2)/((z*stats::sd(data$PC1))^2) +
+          ((data$PC2 - mean(data$PC2))^2)/((z*stats::sd(data$PC2))^2) > 1
+      )
+    ),
+    drop = TRUE
+  ]
+)
+
+plotdata <- dplyr::left_join(
+  data,
+  tibble::rownames_to_column(clean_metadata, "SampleID")
+) %>%
+  dplyr::mutate(label = .data$SampleID) %>%
+  dplyr::mutate(label = ifelse((.data$label %in% outliers), .data$label, NA))
+
+p <- ggplot2::ggplot(plotdata, ggplot2::aes(x = .data$PC1, y = .data$PC2))
+
+p <- p + ggplot2::geom_point(ggplot2::aes(
+  color = .data[[color]],
+  shape = .data[[shape]]
+)
+)
+
+p <- p + ggforce::geom_ellipse(
+  ggplot2::aes(
+    x0 = mean(data$PC1),
+    y0 = mean(data$PC2),
+    a = z*stats::sd(data$PC1),
+    b = z*stats::sd(data$PC2),
+    angle = 0
+  )
+)
+
+p <- p + sagethemes::scale_color_sage_d() +
+  sagethemes::theme_sage() +
+  ggplot2::theme(legend.position = "right") +
+  ggplot2::geom_text(
+    ggplot2::aes(label = .data$label),
+    family = "Lato",
+    size = 4,
+    hjust = 0,
+    na.rm = TRUE
+  )
+
+return(
+  list(
+    plot = p,
+    outliers = outliers
+  )
+)
+}
+```
+
+
+```{r define_files}
+bgi_synid <- "syn23521999"
+uva_synid <- "syn23538559"
+cchmc_synid <- "syn23538349"
+bgi_counts_synid <- "syn23536851"
+uva_counts_synid <- "syn23538555"
+cchmc_counts_synid <- "syn23353602"
+composite_score_synid <- "syn25660423"
+```
+
+```{r get_data}
+bgi <- read_csv(synGet(bgi_synid)$path) %>% 
+  mutate(sequencingSite = "BGI") %>% 
+  mutate(diagnosis = "Malnourished") %>% 
+  mutate(siteName = "BGI") %>% 
+  mutate(biopsySite = "Unknown")
+
+bgi <- clean_covariates(
+  bgi,
+  factors = c("sampleId", "subjectId", "biopsyNumber", "testResult", "sex", 
+              "sequencingSite", "diagnosis", "siteName", "biopsySite"),
+  continuous = c("rin", "ageDays", "pct_pf_reads_aligned", "pct_coding_bases",
+                 "pct_intergenic_bases", "pct_intronic_bases", "ribosomal_bases"),
+  sample_identifier = "sampleId"
+  )
+  
+uva <- read_csv(synGet(uva_synid)$path) %>% 
+  mutate(sequencingSite = "UVA")
+
+uva <- clean_covariates(
+  uva, 
+  factors = c("subjectId", "diagnosis", "sex", "siteName", "biopsySite",
+              "libraryPrepDate", "sequencingDate"), 
+  continuous = c("ageDays", "pct_pf_reads_aligned", "pct_coding_bases",
+                 "pct_intergenic_bases", "pct_intronic_bases"), 
+  sample_identifier = "subjectId"
+)
+
+cchmc <- read_csv(synGet(cchmc_synid)$path) %>% 
+  mutate(sequencingSite = "CCHMC")
+
+cchmc <- clean_covariates(
+  cchmc,
+  factors = c("subjectId", "diagnosis", "sex", "siteName", "biopsySite",
+  "libraryPrepDate", "sequencingDate", "rnaIsolationDate"), 
+  continuous = c("ageDays", "pct_pf_reads_aligned", "pct_coding_bases",
+  "pct_intergenic_bases", "pct_intronic_bases", "pct_ribosomal_bases"),
+  sample_identifier = "subjectId"
+)
+md <- dplyr::bind_rows(bgi, uva, cchmc)
+# remove libraryPrepDate, sequencingDate, rnaIsolationDate, pct_ribosomal_bases (0 for all cohorts)
+# biopsyNumber and testResult (specific to BGI), RIN and ribosomal_bases missing from UVA and CCHMC (?)
+# subjectId NA for CCHMC and UVA as sampleId is unique
+md <- select(md, -one_of("libraryPrepDate", "sequencingDate", "rnaIsolationDate", "pct_ribosomal_bases", "biopsyNumber", "rin", "testResult", "subjectId", "ribosomal_bases"))
+
+#load filtered counts from all dfs 
+bgi_counts <- read_tsv(synGet(bgi_counts_synid)$path)
+uva_counts <- read_tsv(synGet(uva_counts_synid)$path)
+cchmc_counts <- read_tsv(synGet(cchmc_counts_synid)$path)
+
+all_counts <- inner_join(bgi_counts, uva_counts)
+all_counts <- inner_join(all_counts, cchmc_counts)
+```
+
+
+|Sequencing Site |   Site  | No Intervention (Normal)| Nutritional Intervention + Malnourished|Other|
+|:-----|-----:|---------------:|------------------------:|--------:|
+|BGI|BGI   |               0|                        55|0|
+|UVA|BEED  |               0|                       43|0|
+|UVA|UVA   |               8|                        0|10|
+|CCHMC|CCHMC |              23|                        0|2|
+|CCHMC|SEEM  |               0|                       52|0|
+
+```{r subset_samples_by_diagnosis}
+md <- md %>% 
+  filter(diagnosis %in% c("Malnourished", "Normal", "Nutritional Intervention", "Other"))
+md$diagnosis <- droplevels(md$diagnosis)
+```
+
+
+```{r all_samples}
+# check repeat measures of BGI (color by subjectId)
+# split by 14 samples 
+# one <- rownames(bgi[bgi$subjectId[1:14]])
+# second <- rownames(bgi[bgi$subjectId[15:28]])
+# 
+# bgi_plot_one <- identify_outliers(bgi_counts[,one], bgi[one,], color = "subjectId", shape = "siteName", size = "rin")
+# bgi_plot_two <- identify_outliers(bgi_counts[,second], bgi[second,], color = "subjectId", shape = "siteName", size = "rin")
+# bgi_plot_one$plot
+# bgi_plot_two$plot
+```
+
+
+```{r composite_scores}
+composite_score <- read_csv(synGet(composite_score_synid)$path)
+
+composite_score <- select(
+  composite_score, 
+  STUDYID, 
+  SUBJIDO, 
+  INTBRGL, 
+  PANCELD, 
+  INEPILY,
+  GOBCELL,
+  VILSARC,
+  composite_cont_top5)
+
+# create sample list to match composite socres to samples with transciptome data
+samples <- rownames(md)
+samples <- gsub("-1A|-2A", "", samples)
+samples <- gsub("C-", "C", samples)
+composite_score <- composite_score[composite_score$SUBJIDO %in% samples,]
+# compute average 
+avg_cs <- composite_score %>%
+  filter(!is.na(composite_cont_top5)) %>% 
+  select(SUBJIDO, composite_cont_top5) %>%
+  group_by(SUBJIDO) %>% 
+  summarize(mean_composite_top5 = round(mean(composite_cont_top5), 1))
+
+#add mapping variable to md
+md <- md %>% 
+  mutate(mapping = rownames(md)) %>% 
+  mutate(mapping = gsub("-1A|-2A", "", mapping)) %>% 
+  mutate(mapping = gsub("C-0", "C0", mapping)) %>% 
+  mutate(sampleId = rownames(md))
+
+# join mean composite scores
+md <- left_join(md, avg_cs, by = c("mapping" = "SUBJIDO")) %>% 
+  select(-mapping) %>% 
+  column_to_rownames(var = "sampleId")
+
+md <- rownames_to_column(md, var = "sampleId")
+md <- clean_covariates(md, continuous = c("pct_pf_reads_aligned","pct_coding_bases","pct_intergenic_bases","pct_intronic_bases"), factors = c("sex", "ageDays","sequencingSite","diagnosis","siteName","biopsySite"), sample_identifier = "sampleId")
+```
+
+
+```{r subset_counts_by_diagnosis}
+all_counts <- all_counts[,c("feature", rownames(md))]
+```
+
+# PCA
+
+## All samples
+```{r all_sample_pca}
+#remove missing counts
+plot_counts <- column_to_rownames(all_counts, var = "feature")
+filt_counts <- filter_genes(md, plot_counts, conditions_threshold = 0.5, conditions = "sex", cpm_threshold = 1)
+normalized_counts <- limma::voom(filt_counts)
+normalized_counts <- limma::normalizeBetweenArrays(normalized_counts$E, method = "quantile")
+# plot <- identify_outliers(normalized_counts, md, color = "diagnosis", shape = "sequencingSite", size = "mean_composite_top5")
+plot <- fuse(normalized_counts, md, color = "diagnosis", shape = "sequencingSite")
+plot$plot
+```
+\n
+
+Outliers, based on logCPM expression, are `r glue::glue_collapse(plot$outliers, ", ", last = " and ")`.
+
+## CCHMC and UVA
+
+```{r cchmc_uva}
+sub_norm_counts <- rownames_to_column(as.data.frame(normalized_counts), var = "feature")
+sub_norm_counts <- sub_norm_counts[,c("feature", rownames(md)[md$sequencingSite %in% c("CCHMC", "UVA")])]
+plot_counts <- column_to_rownames(sub_norm_counts, var = "feature")
+
+sub_md <- md[md$sequencingSite %in% c("CCHMC", "UVA"),]
+plot <- fuse(plot_counts, sub_md, color = "diagnosis", shape = "sequencingSite")
+plot$plot
+```
+\n
+
+Outliers, based on logCPM expression, are `r glue::glue_collapse(plot$outliers, ", ", last = " and ")`.
+
