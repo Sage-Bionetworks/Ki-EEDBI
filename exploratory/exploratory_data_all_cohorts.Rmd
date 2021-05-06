@@ -15,6 +15,9 @@ Samples sequenced from two sites - UVA, USA and Icddr,b, Bangladesh. Libraries p
 
 ## CCHMC 
 Samples sequenced from two sites - CCHMC, USA and AKU (or SEEM), Pakistan. Libraries prepared and sequenced in 2 batches (not site-specific, e.g. CCHMC and SEEM samples prepared in both batches). Sample preparation - poly (A) capture and ribosome depletion. 
+
+Miscoded samples removed. See [discussion](https://www.synapse.org/#!Synapse:syn22101481/discussion/threadId=7915&replyId=24576) for context.
+
 ```{r setup, echo = FALSE, message = FALSE, warning = FALSE}
 library(synapser)
 library(tidyverse)
@@ -159,6 +162,11 @@ md <- dplyr::bind_rows(bgi, uva, cchmc)
 # subjectId NA for CCHMC and UVA as sampleId is unique
 md <- select(md, -one_of("libraryPrepDate", "sequencingDate", "rnaIsolationDate", "pct_ribosomal_bases", "biopsyNumber", "rin", "testResult", "subjectId", "ribosomal_bases"))
 
+#miscoded
+rm <- c("B002-1A", "B002-2A", "BC11104", "BC21049")
+
+md <- md[!(rownames(md) %in% rm),]
+
 #load filtered counts from all dfs 
 bgi_counts <- read_tsv(synGet(bgi_counts_synid)$path)
 uva_counts <- read_tsv(synGet(uva_counts_synid)$path)
@@ -166,6 +174,7 @@ cchmc_counts <- read_tsv(synGet(cchmc_counts_synid)$path)
 
 all_counts <- inner_join(bgi_counts, uva_counts)
 all_counts <- inner_join(all_counts, cchmc_counts)
+foo <- all_counts[,!(colnames(all_counts) %in% rm)]
 ```
 
 
